@@ -1,0 +1,53 @@
+name: Windows build and release
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test countdown and battery policy
+        run: dotnet run --project tests/Awake.Tests -c Release
+      - name: Publish standalone Windows app
+        run: dotnet publish src/Awake/Awake.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/win-x64
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item README.md,LICENSE artifacts/win-x64/
+          Compress-Archive -Path artifacts/win-x64/* -DestinationPath artifacts/Awake-Windows-x64.zip
+          (Get-FileHash artifacts/Awake-Windows-x64.zip -Algorithm SHA256).Hash.ToLower() + '  Awake-Windows-x64.zip' | Set-Content artifacts/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Awake-Windows-x64
+          path: |
+            artifacts/Awake-Windows-x64.zip
+            artifacts/SHA256SUMS.txt
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: awake-latest-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Awake-Windows-x64
+          path: artifacts
+      - name: Publish latest build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}" artifacts/* --target "$COMMIT" --latest --title "Awake para Windows · build ${GITHUB_RUN_NUMBER}" --notes "Compilación automática para Windows x64. Consulta README para instalación y límites del cierre de tapa. Aplicación sin firma digital."
